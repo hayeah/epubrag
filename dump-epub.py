@@ -8,7 +8,8 @@ from functools import cached_property, cache
 from urllib.parse import urlparse
 
 from typing import NamedTuple, List
-from pprint import pprint 
+from pprint import pprint
+
 
 class Chapter(NamedTuple):
     """
@@ -16,15 +17,17 @@ class Chapter(NamedTuple):
     """
 
     # chapter index within a book
-    index: int 
+    index: int
     href: str
     text: str
     path: str
+
 
 class TextBlock(NamedTuple):
     """
     A block of text in an EPUB chapter.
     """
+
     # text block index within a chapter
     chapter: Chapter
 
@@ -34,9 +37,10 @@ class TextBlock(NamedTuple):
     page: int
     dom: BeautifulSoup
     text: str
-    
+
 
 from enum import IntEnum
+
 
 class PageType(IntEnum):
     FRONTMATTER = 1
@@ -45,10 +49,20 @@ class PageType(IntEnum):
 
 
 def roman_to_int(s: str) -> int:
-    roman_map: dict[str, int] = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+    s = s.upper()
+
+    roman_map: dict[str, int] = {
+        "I": 1,
+        "V": 5,
+        "X": 10,
+        "L": 50,
+        "C": 100,
+        "D": 500,
+        "M": 1000,
+    }
     total: int = 0
     prev_value: int = 0
-    
+
     for char in reversed(s):
         if char not in roman_map:
             raise ValueError("Invalid Roman numeral")
@@ -58,8 +72,9 @@ def roman_to_int(s: str) -> int:
         else:
             total += value
         prev_value = value
-    
+
     return total
+
 
 def parse_pagenumber(input_str: str) -> tuple[int, PageType]:
     # Try parsing as an integer
@@ -77,12 +92,14 @@ def parse_pagenumber(input_str: str) -> tuple[int, PageType]:
     # If neither parsing succeeded, return 0
     return 0, PageType.ERROR
 
-# # \xa0 is actually non-breaking space in Latin1 (ISO 8859-1), also chr(160). You should replace it with a space.    
-    
+
+# # \xa0 is actually non-breaking space in Latin1 (ISO 8859-1), also chr(160). You should replace it with a space.
+
 # # TODO: detect encoding? but actually, it looks like the xml themselves
 # # specifies the encoding as utf8. So maybe it's the tool that's generating these
 # # EPUBs confuding the encodings
-    
+
+
 def href_pathonly(href: str) -> str:
     """
     Extract the path from an href.
@@ -90,7 +107,8 @@ def href_pathonly(href: str) -> str:
     parsed = urlparse(href)
     return parsed.path
 
-class ChapterScraper():
+
+class ChapterScraper:
     def __init__(self, chapter: Chapter):
         self.chapter = chapter
 
@@ -99,8 +117,8 @@ class ChapterScraper():
         """
         Open the chapter in bs4.
         """
-        with open(self.chapter.path, 'r', encoding='utf-8') as file:
-            soup = BeautifulSoup(file, 'xml')
+        with open(self.chapter.path, "r", encoding="utf-8") as file:
+            soup = BeautifulSoup(file, "xml")
         return soup
 
     def blocks(self):
@@ -110,8 +128,8 @@ class ChapterScraper():
 
         # direct children (p, div) of body
         # return self.dom.select('body > p, body > div')
-        return self.dom.select('body > *')
-    
+        return self.dom.select("body > *")
+
 
 class EPUBScraper:
     def __init__(self, rootdir: str):
@@ -122,36 +140,36 @@ class EPUBScraper:
         """
         Glob the opf file and open in bs4.
         """
-        opf_files = glob.glob(f'{self.rootdir}/*.opf')
+        opf_files = glob.glob(f"{self.rootdir}/*.opf")
         if not opf_files:
             raise FileNotFoundError("No .opf file found in the EPUB directory.")
 
         opf_path = opf_files[0]  # Assuming there's only one .opf file
-        with open(opf_path, 'r', encoding='utf-8') as file:
-            soup = BeautifulSoup(file, 'xml')  # Use 'xml' parser for XML/OPF files
+        with open(opf_path, "r", encoding="utf-8") as file:
+            soup = BeautifulSoup(file, "xml")  # Use 'xml' parser for XML/OPF files
         return soup
-    
+
     @cached_property
     def nav_path(self) -> str:
         """
         Get the path to the navigation file.
         """
 
-        toc_reference = self.opf_dom.find('guide').find('reference', type='toc')
-        href = toc_reference['href']
+        toc_reference = self.opf_dom.find("guide").find("reference", type="toc")
+        href = toc_reference["href"]
         path_only = href_pathonly(href)
 
         return os.path.join(self.rootdir, path_only)
-    
+
     @cached_property
     def nav_dom(self) -> BeautifulSoup:
         """
         Open the navigation file in bs4.
         """
-        with open(self.nav_path, 'r', encoding='utf-8') as file:
-            soup = BeautifulSoup(file, 'html.parser')
+        with open(self.nav_path, "r", encoding="utf-8") as file:
+            soup = BeautifulSoup(file, "html.parser")
         return soup
-    
+
     @cached_property
     def chapters(self) -> list[Chapter]:
         """
@@ -169,17 +187,19 @@ class EPUBScraper:
         chapters = []
         i = 0
         for link in links:
-            href = link['href']
+            href = link["href"]
             text = link.text.strip()
-            chapters.append(Chapter(i, href, text, os.path.join(relative_root, href_pathonly(href))))
+            chapters.append(
+                Chapter(i, href, text, os.path.join(relative_root, href_pathonly(href)))
+            )
             i += 1
 
         return chapters
-    
+
     # @cached
     def chapter_scraper(self, i) -> ChapterScraper:
         return ChapterScraper(self.chapters[i])
-    
+
     # returns an iterator of TextBlock
     def text_blocks(self) -> Iterator[TextBlock]:
         page: int = int(0)
@@ -189,9 +209,9 @@ class EPUBScraper:
             scraper = ChapterScraper(chapter)
             for i, block in enumerate(scraper.blocks()):
                 # try to find page number by parsing '<a id="page55">'
-                pagetag = block.find('a', id=lambda x: x and x.startswith('page'))
+                pagetag = block.find("a", id=lambda x: x and x.startswith("page"))
                 if pagetag:
-                    pagestr = pagetag['id'][4:].upper()
+                    pagestr = pagetag["id"][4:].upper()
                     nextpage, pagetype = parse_pagenumber(pagestr)
                     if pagetype == PageType.BODY:
                         page = nextpage
@@ -201,21 +221,23 @@ class EPUBScraper:
                         fm = True
 
                 # not sure if there is a better way to remove <br> tags...
-                for br in block.find_all('br'):
-                    br.replace_with('\n')
-                
-                text = block.get_text(separator='').strip()
+                for br in block.find_all("br"):
+                    br.replace_with("\n")
+
+                text = block.get_text(separator="").strip()
 
                 # text = block.get_text(separator=' ')
                 if len(text) == 0:
                     continue
 
-                yield TextBlock(chapter=chapter, fm=fm, index=i, dom=block, page=page, text=text)
-
-
+                yield TextBlock(
+                    chapter=chapter, fm=fm, index=i, dom=block, page=page, text=text
+                )
 
 
 from zipfile import ZipFile
+
+
 def extract_epub(epub_path: str, output_dir: Optional[str] = None) -> None:
     """
     Extracts an EPUB file to the specified directory.
@@ -230,15 +252,13 @@ def extract_epub(epub_path: str, output_dir: Optional[str] = None) -> None:
 
     os.makedirs(output_dir, exist_ok=True)
 
-    with ZipFile(epub_path, 'r') as epub:
+    with ZipFile(epub_path, "r") as epub:
         epub.extractall(output_dir)
         print(f"EPUB content extracted to: {output_dir}")
 
 
-
-
 # extract_epub('Master Of The Senate (Robert A. Caro) (Z-Library).epub')
-epub = EPUBScraper('Master Of The Senate (Robert A. Caro) (Z-Library)')
+epub = EPUBScraper("Master Of The Senate (Robert A. Caro) (Z-Library)")
 # epub = EPUBScraper('Means Of Ascent (Robert A. Caro) (Z-Library)')
 
 # print(epub.opf_dom)
@@ -249,6 +269,6 @@ epub = EPUBScraper('Master Of The Senate (Robert A. Caro) (Z-Library)')
 for block in epub.text_blocks():
     # pprint(block)
     print(block.text)
-    print('-' * 80)
+    print("-" * 80)
     if block.chapter.index > 2:
         break
