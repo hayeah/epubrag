@@ -1,14 +1,17 @@
 import os
 import glob
-from lxml import etree
 
 from typing import Iterator, Optional
 from bs4 import BeautifulSoup
-from functools import cached_property, cache
+from functools import cached_property
 from urllib.parse import urlparse
 
-from typing import NamedTuple, List
+from typing import NamedTuple
 from pprint import pprint
+
+from zipfile import ZipFile
+
+from enum import IntEnum
 
 
 class Chapter(NamedTuple):
@@ -37,9 +40,6 @@ class TextBlock(NamedTuple):
     page: int
     dom: BeautifulSoup
     text: str
-
-
-from enum import IntEnum
 
 
 class PageType(IntEnum):
@@ -211,7 +211,7 @@ class EPUBScraper:
                 # try to find page number by parsing '<a id="page55">'
                 pagetag = block.find("a", id=lambda x: x and x.startswith("page"))
                 if pagetag:
-                    pagestr = pagetag["id"][4:].upper()
+                    pagestr = pagetag["id"][4:]
                     nextpage, pagetype = parse_pagenumber(pagestr)
                     if pagetype == PageType.BODY:
                         page = nextpage
@@ -233,9 +233,6 @@ class EPUBScraper:
                 yield TextBlock(
                     chapter=chapter, fm=fm, index=i, dom=block, page=page, text=text
                 )
-
-
-from zipfile import ZipFile
 
 
 def extract_epub(epub_path: str, output_dir: Optional[str] = None) -> None:
@@ -267,8 +264,8 @@ epub = EPUBScraper("Master Of The Senate (Robert A. Caro) (Z-Library)")
 # pprint(epub.chapters)
 
 for block in epub.text_blocks():
-    # pprint(block)
-    print(block.text)
-    print("-" * 80)
     if block.chapter.index > 2:
         break
+    pprint(block)
+    print(block.text)
+    print("-" * 80)
