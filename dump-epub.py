@@ -1,3 +1,6 @@
+import hashlib
+import re
+import sqlite3
 import os
 import glob
 
@@ -14,13 +17,19 @@ from zipfile import ZipFile
 from enum import IntEnum
 
 
+class Book(NamedTuple):
+    hash: str
+    title: str
+    author: str
+
+
 class Chapter(NamedTuple):
     """
     A chapter in an EPUB.
     """
 
     # chapter index within a book
-    index: int
+    idx: int
     href: str
     text: str
     path: str
@@ -36,7 +45,7 @@ class TextBlock(NamedTuple):
 
     fm: bool
 
-    index: int
+    idx: int
     page: int
     dom: BeautifulSoup
     text: str
@@ -46,6 +55,14 @@ class PageType(IntEnum):
     FRONTMATTER = 1
     BODY = 2
     ERROR = 3
+
+
+def file_md5(file_path: str) -> str:
+    hash_md5 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
 
 def roman_to_int(s: str) -> int:
@@ -131,9 +148,50 @@ class ChapterScraper:
         return self.dom.select("body > *")
 
 
+def extract_epub(epub_path: str, output_dir: Optional[str] = None) -> None:
+    """
+    Extracts an EPUB file to the specified directory.
+
+    :param epub_path: Path to the EPUB file.
+    :param output_dir: Directory where the EPUB contents will be extracted. If None, extracts to a folder named after the EPUB file.
+    """
+    if output_dir is None:
+        # If no output directory is specified, create one based on the EPUB file name (without extension).
+        output_dir = os.path.splitext(os.path.basename(epub_path))[0]
+        output_dir = os.path.join(os.path.dirname(epub_path), output_dir)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    with ZipFile(epub_path, "r") as epub:
+        epub.extractall(output_dir)
+        print(f"EPUB content extracted to: {output_dir}")
+
+
 class EPUBScraper:
-    def __init__(self, rootdir: str):
-        self.rootdir = rootdir
+    def __init__(self, epubfile: str):
+        self.epubfile = epubfile
+
+        output_dir = os.path.splitext(os.path.basename(epubfile))[0]
+        output_dir = os.path.join(os.path.dirname(epubfile), output_dir)
+
+        # root dir of the extracted epub (remove .epub)
+        self.rootdir = output_dir
+
+    def extract(self):
+        if not os.path.exists(self.rootdir):
+            extract_epub(self.epubfile, self.rootdir)
+
+    @cached_property
+    def book(self) -> Book:
+        return Book(hash=file_md5(self.epubfile), title=self.title, author=self.author)
+
+    @cached_property
+    def title(self) -> str:
+        return self.opf_dom.find("dc:title").string
+
+    @cached_property
+    def author(self) -> str:
+        return self.opf_dom.find("dc:creator").string
 
     @cached_property
     def opf_dom(self) -> BeautifulSoup:
@@ -236,8 +294,10 @@ class EPUBScraper:
                 if len(text) == 0:
                     continue
 
+                text = re.sub(r"\s+", " ", text)
+
                 text_block = TextBlock(
-                    chapter=chapter, fm=fm, index=i, dom=block, page=page, text=text
+                    chapter=chapter, fm=fm, idx=i, dom=block, page=page, text=text
                 )
 
                 # keep the iterator state like page number in this block (if it
@@ -251,34 +311,41 @@ class EPUBScraper:
                 i += 1
 
 
-def extract_epub(epub_path: str, output_dir: Optional[str] = None) -> None:
-    """
-    Extracts an EPUB file to the specified directory.
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS books (
+    id INTEGER PRIMARY KEY,
+    hash TEXT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    author TEXT NOT NULL
+);
 
-    :param epub_path: Path to the EPUB file.
-    :param output_dir: Directory where the EPUB contents will be extracted. If None, extracts to a folder named after the EPUB file.
-    """
-    if output_dir is None:
-        # If no output directory is specified, create one based on the EPUB file name (without extension).
-        output_dir = os.path.splitext(os.path.basename(epub_path))[0]
-        output_dir = os.path.join(os.path.dirname(epub_path), output_dir)
+CREATE TABLE IF NOT EXISTS chapters (
+    id INTEGER PRIMARY KEY,
+    book_id INTEGER,
+    idx INTEGER NOT NULL,
+    href TEXT NOT NULL,
+    text TEXT NOT NULL,
+    path TEXT NOT NULL,
+    FOREIGN KEY (book_id) REFERENCES books(id)
+);
 
-    os.makedirs(output_dir, exist_ok=True)
+CREATE TABLE IF NOT EXISTS text_blocks (
+    id INTEGER PRIMARY KEY,
+    chapter_id INTEGER,
+    fm BOOLEAN NOT NULL,
+    idx INTEGER NOT NULL,
+    page INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    FOREIGN KEY (chapter_id) REFERENCES chapters(id)
+);
 
-    with ZipFile(epub_path, "r") as epub:
-        epub.extractall(output_dir)
-        print(f"EPUB content extracted to: {output_dir}")
+CREATE VIRTUAL TABLE IF NOT EXISTS text_search USING fts5(
+    content='text_blocks',
+    text
+);
+"""
 
 
-# extract_epub('Master Of The Senate (Robert A. Caro) (Z-Library).epub')
-epub = EPUBScraper("Master Of The Senate (Robert A. Caro) (Z-Library)")
-# epub = EPUBScraper('Means Of Ascent (Robert A. Caro) (Z-Library)')
-
-
-# print(epub.opf_dom)
-# print(epub.nav_path)
-# print(epub.nav_dom)
-# pprint(epub.chapters)
 def block_filter(block: TextBlock) -> bool:
     if block.text == "•    •    •":
         return True
@@ -286,10 +353,112 @@ def block_filter(block: TextBlock) -> bool:
     return False
 
 
+class EpubDBLoader:
+    def __init__(self, dbstr: str) -> None:
+        self.db = sqlite3.connect(dbstr)
+        pass
+
+    def load_schema(self):
+        self.db.executescript(SCHEMA)
+        self.db.commit()
+
+    def load(self, epubfile: str):
+        self.load_schema()
+
+        epub = EPUBScraper(epubfile)
+        epub.extract()
+
+        # The lastrowid attribute in SQLite (and by extension, in Python's
+        # sqlite3 module) refers to the row ID of the last row that was inserted
+        # into the database. In the context of SQLite, if you have a table with
+        # a column declared as INTEGER PRIMARY KEY, SQLite uses this column as
+        # an alias for the rowid. Thus, in such cases, lastrowid will give you
+        # the value of the primary key for the last inserted row.
+
+        try:
+            cursor = self.db.cursor()
+
+            book = epub.book
+            cursor.execute(
+                "INSERT INTO books (hash, title, author) VALUES (?, ?, ?)",
+                (book.hash, book.title, book.author),
+            )
+            book_id = cursor.lastrowid
+
+            last_chapter_idx = -1
+            chapter_id = 0
+            for block in epub.text_blocks(block_filter):
+                if block.chapter.idx > last_chapter_idx:
+                    last_chapter_idx = block.chapter.idx
+
+                    cursor.execute(
+                        """
+                        INSERT INTO chapters (book_id, idx, href, text, path)
+                        VALUES (:book_id, :idx, :href, :text, :path)
+                        """,
+                        {
+                            "book_id": book_id,
+                            **block.chapter._asdict(),
+                        },
+                    )
+
+                    chapter_id = cursor.lastrowid
+
+                cursor.execute(
+                    """
+                    INSERT INTO text_blocks (chapter_id, fm, idx, page, text)
+                    VALUES (:chapter_id, :fm, :idx, :page, :text)
+                    """,
+                    {
+                        "chapter_id": chapter_id,
+                        **block._asdict(),
+                    },
+                )
+
+                block_id = cursor.lastrowid
+
+                cursor.execute(
+                    "INSERT INTO text_search (rowid, text) VALUES (?, ?)",
+                    (block_id, block.text),
+                )
+
+            self.db.commit()
+
+        except sqlite3.Error as e:
+            print(f"SQLITE Error: {e}")
+            self.db.rollback()
+
+    def close(self):
+        self.db.close()
+
+
+epub_db = "epub.db"
+
+# epub_files = glob.glob("*.epub")
+
+# for epubfile in epub_files:
+#     print(f"Loading: {epubfile}")
+#     loader = EpubDBLoader(epub_db)
+#     loader.load(epubfile)
+#     loader.close()
+
+
+# means of ascent is maybe a bit shorter than expected..?
+# epub = EPUBScraper("Master Of The Senate (Robert A. Caro) (Z-Library).epub")
+epub = EPUBScraper("The Path To Power (Robert A. Caro).epub")
+# epub.extract()
+
+# print(epub.opf_dom)
+# print(epub.nav_path)
+# print(epub.nav_dom)
+# pprint(epub.chapters)
+# print(epub.book)
+
+
 for block in epub.text_blocks(block_filter):
-    if block.chapter.index > 2:
+    if block.chapter.idx > 2:
         break
 
-    pprint(block)
+    # pprint(block)
     print(block.text)
     print("-" * 80)
