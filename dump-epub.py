@@ -1,7 +1,7 @@
 import os
 import glob
 
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 from bs4 import BeautifulSoup
 from functools import cached_property
 from urllib.parse import urlparse
@@ -201,13 +201,19 @@ class EPUBScraper:
         return ChapterScraper(self.chapters[i])
 
     # returns an iterator of TextBlock
-    def text_blocks(self) -> Iterator[TextBlock]:
+    # Optional[Callable[[TextBlock], bool]]
+    # (TextBlock) -> bool
+    def text_blocks(
+        self, block_filter: Callable[[TextBlock], bool] = None
+    ) -> Iterator[TextBlock]:
         page: int = int(0)
         fm: bool = False
 
         for chapter in self.chapters:
             scraper = ChapterScraper(chapter)
-            for i, block in enumerate(scraper.blocks()):
+
+            i = 0  # index of text block within a chapter
+            for block in scraper.blocks():
                 # try to find page number by parsing '<a id="page55">'
                 pagetag = block.find("a", id=lambda x: x and x.startswith("page"))
                 if pagetag:
@@ -230,9 +236,19 @@ class EPUBScraper:
                 if len(text) == 0:
                     continue
 
-                yield TextBlock(
+                text_block = TextBlock(
                     chapter=chapter, fm=fm, index=i, dom=block, page=page, text=text
                 )
+
+                # keep the iterator state like page number in this block (if it
+                # shows up, but filtering it out, by not incrementing the text
+                # block index)
+                if block_filter and block_filter(text_block):
+                    continue
+
+                yield text_block
+
+                i += 1
 
 
 def extract_epub(epub_path: str, output_dir: Optional[str] = None) -> None:
@@ -258,14 +274,22 @@ def extract_epub(epub_path: str, output_dir: Optional[str] = None) -> None:
 epub = EPUBScraper("Master Of The Senate (Robert A. Caro) (Z-Library)")
 # epub = EPUBScraper('Means Of Ascent (Robert A. Caro) (Z-Library)')
 
+
 # print(epub.opf_dom)
 # print(epub.nav_path)
 # print(epub.nav_dom)
 # pprint(epub.chapters)
+def block_filter(block: TextBlock) -> bool:
+    if block.text == "•    •    •":
+        return True
 
-for block in epub.text_blocks():
+    return False
+
+
+for block in epub.text_blocks(block_filter):
     if block.chapter.index > 2:
         break
+
     pprint(block)
     print(block.text)
     print("-" * 80)
