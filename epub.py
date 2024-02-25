@@ -53,6 +53,9 @@ class TextBlock(NamedTuple):
     text: str
 
 
+BlockFilter = Callable[[TextBlock], bool]
+
+
 class PageType(IntEnum):
     FRONTMATTER = 1
     BODY = 2
@@ -275,9 +278,7 @@ class EPUBScraper:
     # returns an iterator of TextBlock
     # Optional[Callable[[TextBlock], bool]]
     # (TextBlock) -> bool
-    def text_blocks(
-        self, block_filter: Callable[[TextBlock], bool] = None
-    ) -> Iterator[TextBlock]:
+    def text_blocks(self, block_filter: BlockFilter = None) -> Iterator[TextBlock]:
         page: int = int(0)
         fm: bool = False
 
@@ -365,13 +366,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS text_search USING fts5(
 """
 
 
-def block_filter(block: TextBlock) -> bool:
-    if block.text == "•    •    •":
-        return True
-
-    return False
-
-
 class EpubDBLoader:
     def __init__(self, dbstr: str) -> None:
         self.db = sqlite3.connect(dbstr)
@@ -381,7 +375,7 @@ class EpubDBLoader:
         self.db.executescript(SCHEMA)
         self.db.commit()
 
-    def load(self, epubfile: str):
+    def load(self, epubfile: str, block_filter=BlockFilter):
         self.load_schema()
 
         epub = EPUBScraper(epubfile)
@@ -449,35 +443,3 @@ class EpubDBLoader:
 
     def close(self):
         self.db.close()
-
-
-epub_db = "epub.db"
-
-# epub_files = glob.glob("*.epub")
-
-# for epubfile in epub_files:
-#     print(f"Loading: {epubfile}")
-#     loader = EpubDBLoader(epub_db)
-#     loader.load(epubfile)
-#     loader.close()
-
-
-# means of ascent is maybe a bit shorter than expected..?
-# epub = EPUBScraper("Master Of The Senate (Robert A. Caro) (Z-Library).epub")
-epub = EPUBScraper("The Path To Power (Robert A. Caro).epub")
-# epub.extract()
-
-# print(epub.opf_dom)
-# print(epub.nav_path)
-# print(epub.nav_dom)
-# pprint(epub.chapters)
-# print(epub.book)
-
-
-for block in epub.text_blocks(block_filter):
-    if block.chapter.idx > 2:
-        break
-
-    # pprint(block)
-    print(block.text)
-    print("-" * 80)
