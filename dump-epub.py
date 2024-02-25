@@ -16,6 +16,8 @@ from zipfile import ZipFile
 
 from enum import IntEnum
 
+import bs4
+
 
 class Book(NamedTuple):
     hash: str
@@ -110,11 +112,11 @@ def parse_pagenumber(input_str: str) -> tuple[int, PageType]:
     return 0, PageType.ERROR
 
 
-# # \xa0 is actually non-breaking space in Latin1 (ISO 8859-1), also chr(160). You should replace it with a space.
-
-# # TODO: detect encoding? but actually, it looks like the xml themselves
-# # specifies the encoding as utf8. So maybe it's the tool that's generating these
-# # EPUBs confuding the encodings
+# \xa0 is actually non-breaking space in Latin1 (ISO 8859-1), also chr(160). You should replace it with a space.
+#
+# TODO: detect encoding? but actually, it looks like the xml themselves
+# specifies the encoding as utf8. So maybe it's the tool that's generating these
+# EPUBs confuding the encodings
 
 
 def href_pathonly(href: str) -> str:
@@ -143,9 +145,21 @@ class ChapterScraper:
         Get the blocks of text from the chapter.
         """
 
-        # direct children (p, div) of body
         # return self.dom.select('body > p, body > div')
-        return self.dom.select("body > *")
+
+        # Different epub books may have different nesting structure for the
+        # content. What we try to do here to find a content element, and treat
+        # its parent as the container.
+        first = self.dom.select_one("p, h1")
+        if first is None:
+            raise RuntimeError("Cannot find content element")
+
+        container = first.parent
+
+        # select only tags in the container, and filter out text (i.e. new lines)
+        tags = [e for e in container.children if type(e) == bs4.element.Tag]
+
+        return tags
 
 
 def extract_epub(epub_path: str, output_dir: Optional[str] = None) -> None:
@@ -273,7 +287,12 @@ class EPUBScraper:
             i = 0  # index of text block within a chapter
             for block in scraper.blocks():
                 # try to find page number by parsing '<a id="page55">'
-                pagetag = block.find("a", id=lambda x: x and x.startswith("page"))
+                # block.find
+                pagetag = block.find_next(
+                    "a", attrs={"id": lambda x: x and x.startswith("page")}
+                )
+
+                # pagetag = block.find("a", id=lambda x: x and x.startswith("page"))
                 if pagetag:
                     pagestr = pagetag["id"][4:]
                     nextpage, pagetype = parse_pagenumber(pagestr)
