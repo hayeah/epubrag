@@ -366,7 +366,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS text_search USING fts5(
 """
 
 
-class EpubDBLoader:
+class EPUBDBLoader:
     def __init__(self, dbstr: str) -> None:
         self.db = sqlite3.connect(dbstr)
         pass
